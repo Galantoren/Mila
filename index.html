@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mila's Wishlist</title>
+</head>
+<body>
+<script id="app-src" type="text/plain">
+/* ============================================================
+   Mila's Wishlist — self-contained app source.
+   This whole block is captured as text, run once via indirect
+   eval, and re-embedded verbatim by renderDocument() so every
+   published version carries the identical app logic. Only the
+   STATE payload differs between versions.
+   ============================================================ */
+
+var STATE = window.__MILA_STATE__;
+var APP_SRC = window.__MILA_APP_SRC__;
+var claudeApi = null;
+var writable = true;
+var openModalId = null;
+var claimingId = null;
+var LOCAL_KEY = "milaWishlistState";
+
+function loadLocalState() {
+  try {
+    var raw = localStorage.getItem(LOCAL_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  return null;
+}
+
+function saveLocalState() {
+  try { localStorage.setItem(LOCAL_KEY, JSON.stringify(STATE)); } catch (e) {}
+}
+
+/* ---------- data → markup ---------- */
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+
+function money(n) {
+  return "₪" + n.toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function productImg(item, big) {
+  var sizeAttr = big ? "" : ' loading="lazy"';
+  return (
+    '<img src="' + esc(item.image) + '" alt="' + esc(item.nameEn) + '"' + sizeAttr +
+    ' referrerpolicy="no-referrer"' +
+    " onerror=\"this.onerror=null;var p=this.parentElement;this.remove();if(p)p.classList.add('img-broken')\">"
+  );
+}
+
+function claimZoneHTML(item, big) {
+  var claimed = !!item.claimedBy;
+  var busy = claimingId === item.id;
+  var sizeClass = big ? " claim-zone--big" : "";
+  if (busy) {
+    return (
+      '<div class="claim-zone' + sizeClass + '" data-claim-zone>' +
+      '<form class="claim-form" data-claim-form data-id="' + esc(item.id) + '">' +
+      '<input type="text" name="who" placeholder="Your name" maxlength="40" autocomplete="off" data-claim-input required>' +
+      '<button type="submit" class="claim-go" title="Confirm">✓</button>' +
+      '<button type="button" class="claim-cancel" data-claim-cancel title="Cancel">✕</button>' +
+      "</form></div>"
+    );
+  }
+  if (claimed) {
+    return (
+      '<div class="claim-zone' + sizeClass + '" data-claim-zone>' +
+      '<button class="claim-dot claim-dot--done" data-unclaim data-id="' + esc(item.id) + '" title="Remove claim">' +
+      '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10.5l4 4 8-9" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+      "</button>" +
+      '<span class="claim-label claim-label--done">' + esc(item.claimedBy) + " is bringing this</span>" +
+      "</div>"
+    );
+  }
+  return (
+    '<div class="claim-zone' + sizeClass + '" data-claim-zone>' +
+    '<button class="claim-dot" data-claim data-id="' + esc(item.id) + '" title="Mark as bringing"></button>' +
+    '<span class="claim-label">No one yet — tap to claim</span>' +
+    "</div>"
+  );
+}
+
+function priceHTML(item) {
+  if (item.originalPrice && item.originalPrice > item.price) {
+    return (
+      '<span class="price-now">' + money(item.price) + "</span>" +
+      '<span class="price-was">' + money(item.originalPrice) + "</span>"
+    );
+  }
+  return '<span class="price-now">' + money(item.price) + "</span>";
+}
+
+function cardHTML(item) {
+  return (
+    '<article class="card" data-card data-id="' + esc(item.id) + '" tabindex="0" role="button" aria-haspopup="dialog">' +
+    '<div class="card-art">' + productImg(item, false) + "</div>" +
+    '<div class="card-body">' +
+    '<p class="card-name-he"><bdi lang="he">' + esc(item.nameHe) + "</bdi></p>" +
+    '<h3 class="card-name">' + esc(item.nameEn) + "</h3>" +
+    '<p class="card-blurb">' + esc(item.blurb) + "</p>" +
+    '<p class="card-price">' + priceHTML(item) + "</p>" +
+    "</div>" +
+    '<div class="card-foot">' + claimZoneHTML(item, false) + "</div>" +
+    "</article>"
+  );
+}
+
+function gridHTML(items) {
+  return '<div class="grid" id="grid">' + items.map(cardHTML).join("") + "</div>";
+}
+
+function headerHTML() {
+  return (
+    "<header class=\"hero\">" +
+    '<div class="confetti" aria-hidden="true"></div>' +
+    '<p class="eyebrow">Birthday wishlist</p>' +
+    "<h1>Mila is turning one! 🎂</h1>" +
+    '<p class="hero-sub">Pick something below and mark it as yours — everyone here can see who\'s bringing what, so nothing doubles up.</p>' +
+    "</header>"
+  );
+}
+
+function modalOverlayHTML(item) {
+  var hidden = item ? "" : " hidden";
+  var inner = item ? modalInnerHTML(item) : "";
+  return (
+    '<div class="overlay' + (item ? " is-open" : "") + '" id="overlay" data-overlay' + hidden + ">" +
+    '<div class="modal" role="dialog" aria-modal="true" id="modal">' + inner + "</div>" +
+    "</div>"
+  );
+}
+
+function modalInnerHTML(item) {
+  return (
+    '<button class="modal-close" data-close aria-label="Close">✕</button>' +
+    '<div class="modal-art">' + productImg(item, true) + "</div>" +
+    '<div class="modal-body">' +
+    '<p class="card-name-he"><bdi lang="he">' + esc(item.nameHe) + "</bdi></p>" +
+    '<h2 class="modal-name">' + esc(item.nameEn) + "</h2>" +
+    '<p class="modal-desc">' + esc(item.description) + "</p>" +
+    '<p class="modal-price">' + priceHTML(item) + "</p>" +
+    '<a class="modal-link" href="' + esc(item.link) + '" target="_blank" rel="noopener noreferrer">View on ' + esc(item.site) + " →</a>" +
+    '<div class="modal-claim">' + claimZoneHTML(item, true) + "</div>" +
+    "</div>"
+  );
+}
+
+function stylesCSS() {
+  return "\n" + [
+    "@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Figtree:wght@400;500;600;700&display=swap');",
+    ":root{",
+    "--bg:#FCF4E7;--bg-soft:#FFFDF8;--card:#FFFFFF;--ink:#3B2A2F;--ink-soft:#8A7770;",
+    "--line:#ECDFC9;--accent:#C1447E;--accent-ink:#FFFFFF;--accent-2:#E3A857;--accent-3:#4F7CAC;",
+    "--claimed:#4F7A5A;--claimed-soft:#E4EDE2;--shadow:rgba(59,42,47,.14);--shadow-soft:rgba(59,42,47,.08);",
+    "}",
+    "@media (prefers-color-scheme: dark){:root:not([data-theme='light']){",
+    "--bg:#241B1D;--bg-soft:#2F2426;--card:#332628;--ink:#F5E9DD;--ink-soft:#C7B3A8;",
+    "--line:#4A3A3B;--accent:#E37DA6;--accent-ink:#241B1D;--accent-2:#E8BE7A;--accent-3:#8FB4DE;",
+    "--claimed:#8FC49B;--claimed-soft:#33413A;--shadow:rgba(0,0,0,.45);--shadow-soft:rgba(0,0,0,.25);",
+    "}}",
+    ":root[data-theme='dark']{",
+    "--bg:#241B1D;--bg-soft:#2F2426;--card:#332628;--ink:#F5E9DD;--ink-soft:#C7B3A8;",
+    "--line:#4A3A3B;--accent:#E37DA6;--accent-ink:#241B1D;--accent-2:#E8BE7A;--accent-3:#8FB4DE;",
+    "--claimed:#8FC49B;--claimed-soft:#33413A;--shadow:rgba(0,0,0,.45);--shadow-soft:rgba(0,0,0,.25);",
+    "}",
+    "*{box-sizing:border-box;}",
+    "body{margin:0;background:var(--bg);color:var(--ink);font-family:Figtree,system-ui,-apple-system,'Segoe UI',sans-serif;",
+    "-webkit-font-smoothing:antialiased;}",
+    "#root{max-width:980px;margin:0 auto;padding:0 20px 64px;}",
+    "h1,h2{font-family:Fraunces,Georgia,serif;text-wrap:balance;margin:0;}",
+    ".hero{position:relative;padding:56px 12px 40px;text-align:center;overflow:hidden;}",
+    ".confetti{position:absolute;inset:0;pointer-events:none;z-index:0;",
+    "background-image:radial-gradient(circle,var(--accent-2) 3px,transparent 3.5px),",
+    "radial-gradient(circle,var(--accent-3) 3px,transparent 3.5px),",
+    "radial-gradient(circle,var(--accent) 3px,transparent 3.5px);",
+    "background-size:120px 120px,160px 160px,140px 140px;",
+    "background-position:10px 20px,90% 10%,60% 70%;opacity:.5;}",
+    ".hero > *{position:relative;z-index:1;}",
+    ".eyebrow{margin:0 0 10px;font-size:12.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:700;}",
+    ".hero h1{font-size:clamp(32px,5vw,48px);font-weight:700;}",
+    ".hero-sub{max-width:520px;margin:16px auto 0;color:var(--ink-soft);font-size:16px;line-height:1.55;}",
+    ".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:22px;}",
+    ".card{background:var(--card);border:1px solid var(--line);border-radius:22px;overflow:hidden;",
+    "display:flex;flex-direction:column;cursor:pointer;text-align:left;",
+    "box-shadow:0 1px 2px var(--shadow-soft);transition:transform .15s ease,box-shadow .15s ease;}",
+    ".card:hover,.card:focus-visible{transform:translateY(-3px);box-shadow:0 14px 28px var(--shadow);outline:none;}",
+    ".card:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}",
+    ".card-art{background:var(--bg-soft);aspect-ratio:4/3;overflow:hidden;}",
+    ".card-art img{width:100%;height:100%;object-fit:cover;display:block;}",
+    ".card-art.img-broken,.modal-art.img-broken{display:flex;align-items:center;justify-content:center;}",
+    ".card-art.img-broken::after{content:'🎁';font-size:36px;}",
+    ".modal-art.img-broken::after{content:'🎁';font-size:60px;}",
+    ".card-body{padding:14px 18px 4px;flex:1;}",
+    ".card-name-he{margin:0 0 2px;font-size:13px;color:var(--ink-soft);}",
+    ".card-name{margin:0 0 8px;font-size:19px;font-weight:600;line-height:1.3;}",
+    ".card-blurb{margin:0 0 12px;font-size:14px;line-height:1.5;color:var(--ink-soft);}",
+    ".card-price{margin:0 0 14px;font-variant-numeric:tabular-nums;}",
+    ".price-now{font-size:18px;font-weight:700;color:var(--ink);}",
+    ".price-was{margin-inline-start:8px;font-size:13px;color:var(--ink-soft);text-decoration:line-through;}",
+    ".card-foot{border-top:1px solid var(--line);padding:12px 18px 16px;}",
+    ".claim-zone{display:flex;align-items:center;gap:10px;min-height:32px;}",
+    ".claim-dot{flex:0 0 auto;width:30px;height:30px;border-radius:50%;border:2px solid var(--line);",
+    "background:var(--bg-soft);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;",
+    "color:var(--claimed);transition:border-color .15s ease,background .15s ease;}",
+    ".claim-dot:hover{border-color:var(--accent);}",
+    ".claim-dot svg{width:16px;height:16px;}",
+    ".claim-dot--done{background:var(--claimed-soft);border-color:var(--claimed);color:var(--claimed);}",
+    ".claim-label{font-size:13.5px;color:var(--ink-soft);}",
+    ".claim-label--done{color:var(--claimed);font-weight:600;}",
+    ".claim-form{display:flex;align-items:center;gap:6px;width:100%;}",
+    ".claim-form input{flex:1;min-width:0;border:1px solid var(--line);border-radius:10px;padding:7px 10px;",
+    "font:inherit;font-size:13.5px;background:var(--bg-soft);color:var(--ink);}",
+    ".claim-form input:focus{outline:2px solid var(--accent);outline-offset:1px;}",
+    ".claim-go,.claim-cancel{flex:0 0 auto;width:30px;height:30px;border-radius:50%;border:none;cursor:pointer;",
+    "font-size:14px;display:flex;align-items:center;justify-content:center;}",
+    ".claim-go{background:var(--accent);color:var(--accent-ink);}",
+    ".claim-cancel{background:var(--bg-soft);color:var(--ink-soft);border:1px solid var(--line);}",
+    ".overlay{position:fixed;inset:0;background:rgba(20,14,15,.5);display:flex;align-items:center;",
+    "justify-content:center;padding:20px;z-index:50;}",
+    ".overlay[hidden]{display:none;}",
+    ".modal{background:var(--card);border-radius:24px;max-width:520px;width:100%;max-height:88vh;",
+    "overflow-y:auto;position:relative;box-shadow:0 24px 60px var(--shadow);}",
+    ".modal-close{position:absolute;top:14px;right:14px;width:34px;height:34px;border-radius:50%;",
+    "border:1px solid var(--line);background:var(--bg-soft);color:var(--ink);font-size:15px;cursor:pointer;z-index:2;}",
+    ".modal-art{background:var(--bg-soft);aspect-ratio:4/3;overflow:hidden;border-radius:24px 24px 0 0;}",
+    ".modal-art img{width:100%;height:100%;object-fit:cover;display:block;}",
+    ".modal-body{padding:22px 26px 28px;}",
+    ".modal-name{font-size:24px;font-weight:700;margin-bottom:10px;}",
+    ".modal-desc{font-size:15px;line-height:1.6;color:var(--ink-soft);margin:0 0 16px;max-width:65ch;}",
+    ".modal-price{margin:0 0 16px;font-variant-numeric:tabular-nums;}",
+    ".modal-link{display:inline-block;margin-bottom:20px;color:var(--accent);font-weight:600;text-decoration:none;",
+    "border-bottom:1px solid currentColor;}",
+    ".modal-claim{border-top:1px solid var(--line);padding-top:16px;}",
+    ".claim-zone--big .claim-dot{width:36px;height:36px;}",
+    ".claim-zone--big .claim-label{font-size:14.5px;}",
+    ".banner{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(12px);",
+    "background:var(--ink);color:var(--bg);padding:10px 18px;border-radius:12px;font-size:13.5px;",
+    "opacity:0;pointer-events:none;transition:opacity .2s ease,transform .2s ease;z-index:80;max-width:90vw;text-align:center;}",
+    ".banner.is-shown{opacity:1;transform:translateX(-50%) translateY(0);}",
+    "@media (prefers-reduced-motion:reduce){*{transition:none!important;}}"
+  ].join("\n");
+}
+
+/* ---------- full document (for self-publish) ---------- */
+
+function renderDocument(state) {
+  return (
+    "<!doctype html>\n" +
+    '<html lang="en">\n<head>\n<meta charset="utf-8">\n' +
+    '<meta name="viewport" content="width=device-width, initial-scale=1">\n' +
+    "<title>Mila's Wishlist</title>\n<style>" + stylesCSS() + "</style>\n</head>\n<body>\n" +
+    '<div id="root">' + headerHTML() + gridHTML(state.items) + "</div>" +
+    modalOverlayHTML(null) +
+    '<div class="banner" id="banner"></div>' +
+    '<script id="app-src" type="text/plain">' + APP_SRC.replace(/<\/script/gi, "<\\/script") + "<\/script>\n" +
+    "<script>\n" +
+    "window.__MILA_STATE__ = " + JSON.stringify(state) + ";\n" +
+    "window.__MILA_APP_SRC__ = document.getElementById('app-src').textContent;\n" +
+    "(0, eval)(window.__MILA_APP_SRC__);\n" +
+    "<\/script>\n</body>\n</html>"
+  );
+}
+
+/* ---------- render + wire up current view ---------- */
+
+function mountShell() {
+  document.title = "Mila's Wishlist";
+  var style = document.createElement("style");
+  style.textContent = stylesCSS();
+  document.head.appendChild(style);
+  var root = document.createElement("div");
+  root.id = "root";
+  document.body.appendChild(root);
+  document.body.insertAdjacentHTML("beforeend", modalOverlayHTML(null) + '<div class="banner" id="banner"></div>');
+}
+
+function renderAll() {
+  var root = document.getElementById("root");
+  root.innerHTML = headerHTML() + gridHTML(STATE.items);
+  var overlay = document.getElementById("overlay");
+  var item = openModalId ? STATE.items.find(function (i) { return i.id === openModalId; }) : null;
+  var modal = document.getElementById("modal");
+  if (item) {
+    modal.innerHTML = modalInnerHTML(item);
+    overlay.hidden = false;
+    overlay.classList.add("is-open");
+  } else {
+    overlay.hidden = true;
+    overlay.classList.remove("is-open");
+    modal.innerHTML = "";
+  }
+}
+
+var bannerTimer = null;
+function showBanner(msg) {
+  var b = document.getElementById("banner");
+  if (!b) return;
+  b.textContent = msg;
+  b.classList.add("is-shown");
+  clearTimeout(bannerTimer);
+  bannerTimer = setTimeout(function () { b.classList.remove("is-shown"); }, 3600);
+}
+
+function findItem(id) {
+  return STATE.items.find(function (i) { return i.id === id; });
+}
+
+async function persist() {
+  saveLocalState();
+  renderAll();
+  if (!writable) return;
+  if (!claudeApi) {
+    showBanner("Saved on this device — other guests won't see this claim unless you tell them.");
+    return;
+  }
+  try {
+    await claudeApi.publish(renderDocument(STATE));
+    /* success reloads this view */
+  } catch (err) {
+    var code = err && err.code;
+    if (code === "conflict") return; /* incoming reload will fix it */
+    if (code === "not_writer" || code === "not_granted") {
+      writable = false;
+      showBanner("This view is read-only, so the claim couldn't be saved.");
+      return;
+    }
+    showBanner("Couldn't save just now — please try again.");
+  }
+}
+
+function onRootClick(e) {
+  var cancelBtn = e.target.closest("[data-claim-cancel]");
+  if (cancelBtn) {
+    claimingId = null;
+    renderAll();
+    return;
+  }
+  var claimBtn = e.target.closest("[data-claim]");
+  if (claimBtn) {
+    e.stopPropagation();
+    claimingId = claimBtn.getAttribute("data-id");
+    renderAll();
+    var input = document.querySelector('[data-claim-input]');
+    if (input) input.focus();
+    return;
+  }
+  var unclaimBtn = e.target.closest("[data-unclaim]");
+  if (unclaimBtn) {
+    e.stopPropagation();
+    var id = unclaimBtn.getAttribute("data-id");
+    var item = findItem(id);
+    if (item && confirm(item.claimedBy + " is bringing this. Remove the claim?")) {
+      item.claimedBy = null;
+      persist();
+    }
+    return;
+  }
+  var closeBtn = e.target.closest("[data-close]");
+  if (closeBtn) {
+    openModalId = null;
+    renderAll();
+    return;
+  }
+  if (e.target.id === "overlay") {
+    openModalId = null;
+    renderAll();
+    return;
+  }
+  var card = e.target.closest("[data-card]");
+  if (card && !e.target.closest("[data-claim-zone]")) {
+    openModalId = card.getAttribute("data-id");
+    renderAll();
+  }
+}
+
+function onRootSubmit(e) {
+  var form = e.target.closest("[data-claim-form]");
+  if (!form) return;
+  e.preventDefault();
+  var id = form.getAttribute("data-id");
+  var input = form.querySelector("[data-claim-input]");
+  var name = (input.value || "").trim();
+  if (!name) return;
+  var item = findItem(id);
+  if (item) {
+    item.claimedBy = name.slice(0, 40);
+    claimingId = null;
+    persist();
+  }
+}
+
+function onRootKeydown(e) {
+  if (e.key === "Escape" && openModalId) {
+    openModalId = null;
+    renderAll();
+  }
+}
+
+function onCardKeydown(e) {
+  var card = e.target.closest("[data-card]");
+  if (card && (e.key === "Enter" || e.key === " ") && !e.target.closest("[data-claim-zone]")) {
+    e.preventDefault();
+    openModalId = card.getAttribute("data-id");
+    renderAll();
+  }
+}
+
+function init() {
+  var saved = loadLocalState();
+  if (saved && saved.items) STATE = saved;
+  if (!document.getElementById("root")) mountShell();
+  renderAll();
+  document.body.addEventListener("click", onRootClick);
+  document.body.addEventListener("submit", onRootSubmit);
+  document.body.addEventListener("keydown", function (e) { onRootKeydown(e); onCardKeydown(e); });
+  if (window.claude && typeof window.claude.use === "function") {
+    window.claude.use("artifact").then(function (api) { claudeApi = api; });
+  }
+}
+
+init();
+</script>
+<script>
+  window.__MILA_STATE__ = {
+    items: [
+      {
+        id: "tower",
+        nameHe: "מגדל למידה מתקפל",
+        nameEn: "Folding Learning Tower",
+        image: "https://static.wixstatic.com/media/498cac_d91c418b2ebe45d78b2b92fe6ba9d2ba~mv2.jpg/v1/fill/w_600,h_600,al_c,q_80,enc_avif,quality_auto/498cac_d91c418b2ebe45d78b2b92fe6ba9d2ba~mv2.jpg",
+        price: 760.00,
+        originalPrice: null,
+        blurb: "A wide, stable wooden tower so she can safely reach the counter — folds flat to 8cm when not in use.",
+        description: "A foldable learning tower that lets a toddler safely stand at counter height for kitchen and table activities. The wide base keeps it stable, and it folds down to just 8cm thick for easy storage. Made from European birch wood with a water-based coating.",
+        link: "https://www.migbabo.com/product-page/%D7%9E%D7%92%D7%93%D7%9C-%D7%9C%D7%9E%D7%99%D7%93%D7%94-%D7%9E%D7%AA%D7%A7%D7%A4%D7%9C",
+        site: "Migbabo",
+        claimedBy: null
+      },
+      {
+        id: "bookshelf",
+        nameHe: "ספרייה מונטסורית – מעמד ספרים מעוגל עם גלים",
+        nameEn: "Montessori Bookshelf (Wave Design)",
+        image: "https://www.ponponi.co.il/wp-content/uploads/2025/05/sifia1.jpg",
+        price: 589.00,
+        originalPrice: null,
+        blurb: "Front-facing shelves set at toddler eye level, so she can pick her own book.",
+        description: "A wooden Montessori-style bookshelf with three front-facing shelves sized for little hands and eyes, encouraging independent book selection. Pine wood with an easy-to-clean coating. 75 × 54 × 30 cm.",
+        link: "https://www.ponponi.co.il/product/bookshelf09/",
+        site: "Ponponi",
+        claimedBy: null
+      },
+      {
+        id: "bed",
+        nameHe: "מיטת רצפה בל",
+        nameEn: "Bell Floor Bed",
+        image: "https://static.wixstatic.com/media/d08c84_f2242b7daed543d881bce74d64826963~mv2.png/v1/fill/w_5712,h_4284,al_c,q_95,enc_avif,quality_auto/d08c84_f2242b7daed543d881bce74d64826963~mv2.png",
+        price: 1899.00,
+        originalPrice: 2199.00,
+        blurb: "A cozy, low-to-the-ground bed with removable side rails for a safe first “big bed.”",
+        description: "A birch-wood floor bed with an enveloping, nest-like frame for a cozy first “big bed” feel, plus removable side rails for safety. 95 × 195 cm; mattress sold separately.",
+        link: "https://www.woodbekids.com/product-page/%D7%9E%D7%99%D7%98%D7%AA-%D7%A8%D7%A6%D7%A4%D7%94-%D7%A4%D7%A8%D7%97",
+        site: "Woodbe",
+        claimedBy: null
+      }
+    ]
+  };
+  window.__MILA_APP_SRC__ = document.getElementById("app-src").textContent;
+  (0, eval)(window.__MILA_APP_SRC__);
+</script>
+</body>
+</html>
