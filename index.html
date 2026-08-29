@@ -39,6 +39,9 @@ background-position:10px 20px,90% 10%,60% 70%;opacity:.5;}
 .eyebrow{margin:0 0 10px;font-size:12.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:700;}
 .hero h1{font-size:clamp(32px,5vw,48px);font-weight:700;}
 .hero-sub{max-width:520px;margin:16px auto 0;color:var(--ink-soft);font-size:16px;line-height:1.55;}
+.countdown{display:inline-block;margin:18px auto 0;padding:8px 18px;border-radius:999px;
+background:var(--card);border:1px solid var(--line);color:var(--ink-soft);font-size:14px;}
+.countdown strong{color:var(--accent);font-size:19px;font-family:Fraunces,Georgia,serif;}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:22px;}
 .card{background:var(--card);border:1px solid var(--line);border-radius:22px;overflow:hidden;
 display:flex;flex-direction:column;cursor:pointer;text-align:left;
@@ -284,6 +287,22 @@ function gridHTML(items) {
   return '<div class="grid" id="grid">' + items.map(cardHTML).join("") + "</div>";
 }
 
+function daysUntilOct8() {
+  var now = new Date();
+  var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  var target = new Date(today.getFullYear(), 9, 8);
+  if (target < today) target = new Date(today.getFullYear() + 1, 9, 8);
+  return Math.round((target - today) / 86400000);
+}
+
+function countdownHTML() {
+  var days = daysUntilOct8();
+  var text = days === 0
+    ? "It's the big day! 🎉"
+    : '<strong>' + days + '</strong> ' + (days === 1 ? "day" : "days") + " until the big day 🎉";
+  return '<p class="countdown">' + text + "</p>";
+}
+
 function headerHTML() {
   return (
     "<header class=\"hero\">" +
@@ -291,6 +310,7 @@ function headerHTML() {
     '<p class="eyebrow">Birthday wishlist</p>' +
     "<h1>Mila is turning one! 🎂</h1>" +
     '<p class="hero-sub">Pick something below and mark it as yours — everyone here can see who\'s bringing what, so nothing doubles up.</p>' +
+    countdownHTML() +
     "</header>"
   );
 }
