@@ -488,7 +488,7 @@ function gridHTML(items) {
   return '<div class="grid" id="grid">' + items.map(cardHTML).join("") + "</div>";
 }
 
-function sortedItems(items) {
+function applyPriceOrder(items) {
   if (sortOrder !== "price-asc" && sortOrder !== "price-desc") return items;
   var dir = sortOrder === "price-asc" ? 1 : -1;
   var fallback = sortOrder === "price-asc" ? Infinity : -Infinity;
@@ -497,6 +497,12 @@ function sortedItems(items) {
     var bv = b.price == null ? fallback : b.price;
     return (av - bv) * dir;
   });
+}
+
+function sortedItems(items) {
+  var claimed = items.filter(function (i) { return !!i.claimedBy; });
+  var unclaimed = items.filter(function (i) { return !i.claimedBy; });
+  return applyPriceOrder(claimed).concat(applyPriceOrder(unclaimed));
 }
 
 function toolbarHTML() {
