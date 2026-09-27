@@ -120,7 +120,28 @@ opacity:0;pointer-events:none;transition:opacity .2s ease,transform .2s ease;z-i
 border:none;background:var(--line);opacity:.5;cursor:pointer;padding:0;z-index:90;}
 .admin-toggle:hover{opacity:1;}
 .admin-toggle.is-admin{background:var(--claimed);opacity:1;}
-@media (prefers-reduced-motion:reduce){*{transition:none!important;}}
+.countdown--today{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600;}
+.celebration{position:fixed;inset:0;pointer-events:none;overflow:hidden;z-index:40;}
+.balloon{position:absolute;bottom:-90px;width:40px;height:52px;border-radius:50% 50% 48% 48% / 60% 60% 40% 40%;
+opacity:.92;box-shadow:inset -6px -6px 10px rgba(0,0,0,.12);animation:balloon-rise linear infinite;}
+.balloon::after{content:'';position:absolute;left:50%;bottom:-24px;width:1px;height:24px;
+background:rgba(59,42,47,.3);transform:translateX(-50%);}
+@keyframes balloon-rise{
+0%{transform:translateY(0) translateX(0) rotate(-4deg);}
+25%{transform:translateY(-32vh) translateX(18px) rotate(4deg);}
+50%{transform:translateY(-64vh) translateX(-18px) rotate(-4deg);}
+75%{transform:translateY(-96vh) translateX(18px) rotate(4deg);}
+100%{transform:translateY(-130vh) translateX(0) rotate(-4deg);}
+}
+.firework{position:fixed;width:6px;height:6px;border-radius:50%;animation:firework-burst .9s ease-out forwards;}
+@keyframes firework-burst{
+0%{transform:translate(0,0) scale(1);opacity:1;}
+100%{transform:translate(var(--dx),var(--dy)) scale(.3);opacity:0;}
+}
+@media (prefers-reduced-motion:reduce){
+*{transition:none!important;}
+.balloon,.firework{display:none!important;}
+}
 </style>
 </head>
 <body>
@@ -130,6 +151,7 @@ border:none;background:var(--line);opacity:.5;cursor:pointer;padding:0;z-index:9
   <div class="modal" role="dialog" aria-modal="true" id="modal"></div>
 </div>
 <div class="banner" id="banner"></div>
+<div class="celebration" id="celebration" aria-hidden="true"></div>
 <button class="admin-toggle" id="admin-toggle" title="Admin" aria-label="Admin"></button>
 
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
@@ -528,19 +550,32 @@ function toolbarHTML() {
   );
 }
 
-function daysUntilOct8() {
+var THANK_YOU_WINDOW_DAYS = 30;
+
+function birthdayState() {
   var now = new Date();
   var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  var target = new Date(today.getFullYear(), 9, 8);
-  if (target < today) target = new Date(today.getFullYear() + 1, 9, 8);
-  return Math.round((target - today) / 86400000);
+  var thisYear = new Date(today.getFullYear(), 9, 8);
+  var diffDays = Math.round((thisYear - today) / 86400000);
+  if (diffDays === 0) return { phase: "today" };
+  if (diffDays < 0 && -diffDays <= THANK_YOU_WINDOW_DAYS) return { phase: "after" };
+  if (diffDays < 0) {
+    var nextYear = new Date(today.getFullYear() + 1, 9, 8);
+    return { phase: "countdown", days: Math.round((nextYear - today) / 86400000) };
+  }
+  return { phase: "countdown", days: diffDays };
 }
 
 function countdownHTML() {
-  var days = daysUntilOct8();
-  var text = days === 0
-    ? "It's the big day! 🎉"
-    : '<strong>' + days + '</strong> ' + (days === 1 ? "day" : "days") + " until the big day 🎉";
+  var state = birthdayState();
+  if (state.phase === "today") {
+    return '<p class="countdown countdown--today">It\'s the big day! 🎉</p>';
+  }
+  if (state.phase === "after") {
+    return '<p class="countdown">Thanks for celebrating with Mila! 🎂</p>';
+  }
+  var days = state.days;
+  var text = '<strong>' + days + '</strong> ' + (days === 1 ? "day" : "days") + " until the big day 🎉";
   return '<p class="countdown">' + text + "</p>";
 }
 
@@ -756,12 +791,62 @@ function onAdminToggleClick() {
   });
 }
 
+/* ---------- birthday celebration animation ---------- */
+
+var CELEBRATION_COLORS = ["#C1447E", "#E3A857", "#4F7CAC", "#4F7A5A", "#E37DA6"];
+
+function prefersReducedMotion() {
+  return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+}
+
+function launchBalloons(container) {
+  var count = 14;
+  for (var i = 0; i < count; i++) {
+    var balloon = document.createElement("span");
+    balloon.className = "balloon";
+    balloon.style.left = (Math.random() * 94) + "vw";
+    balloon.style.background = CELEBRATION_COLORS[i % CELEBRATION_COLORS.length];
+    balloon.style.animationDuration = (7 + Math.random() * 4) + "s";
+    balloon.style.animationDelay = (Math.random() * 6) + "s";
+    container.appendChild(balloon);
+  }
+}
+
+function spawnFirework(container) {
+  var cx = 10 + Math.random() * 80;
+  var cy = 12 + Math.random() * 35;
+  var sparkCount = 10;
+  for (var i = 0; i < sparkCount; i++) {
+    var angle = (Math.PI * 2 * i) / sparkCount + Math.random() * 0.3;
+    var dist = 40 + Math.random() * 40;
+    var dot = document.createElement("span");
+    dot.className = "firework";
+    dot.style.left = cx + "vw";
+    dot.style.top = cy + "vh";
+    dot.style.background = CELEBRATION_COLORS[i % CELEBRATION_COLORS.length];
+    dot.style.setProperty("--dx", (Math.cos(angle) * dist) + "px");
+    dot.style.setProperty("--dy", (Math.sin(angle) * dist) + "px");
+    container.appendChild(dot);
+    (function (el) { setTimeout(function () { el.remove(); }, 950); })(dot);
+  }
+}
+
+function startCelebration() {
+  if (birthdayState().phase !== "today" || prefersReducedMotion()) return;
+  var container = document.getElementById("celebration");
+  if (!container) return;
+  launchBalloons(container);
+  spawnFirework(container);
+  setInterval(function () { spawnFirework(container); }, 2200);
+}
+
 function init() {
   renderAll();
   document.body.addEventListener("click", onRootClick);
   document.body.addEventListener("submit", onRootSubmit);
   document.body.addEventListener("keydown", function (e) { onRootKeydown(e); onCardKeydown(e); });
   document.getElementById("admin-toggle").addEventListener("click", onAdminToggleClick);
+  startCelebration();
 }
 
 init();
